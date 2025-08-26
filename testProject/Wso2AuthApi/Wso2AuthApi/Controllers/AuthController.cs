@@ -7,7 +7,6 @@ using System.Text;
 public class AuthController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;
-
     private const string TokenEndpoint = "https://localhost:9443/oauth2/token";
     private const string LogoutEndpoint = "https://localhost:9443/oidc/logout";
     private const string ClientId = "OkQXerPG4ASHB4RAKQBSGaqFG4wa";
@@ -17,7 +16,6 @@ public class AuthController : ControllerBase
         _httpClientFactory = httpClientFactory;
     }
 
-    // PKCE
     [HttpGet("pkce")]
     public IActionResult GetPkce()
     {
@@ -28,20 +26,13 @@ public class AuthController : ControllerBase
         return Ok(new { code_verifier = codeVerifier, code_challenge = codeChallenge });
     }
 
-    // Exchange code -> tokens (kept for convenience)
     [HttpPost("token")]
     public async Task<IActionResult> ExchangeCode([FromBody] TokenRequest req)
     {
         if (req == null || string.IsNullOrEmpty(req.Code) || string.IsNullOrEmpty(req.CodeVerifier))
-            return BadRequest(new { error = "code and codeVerifier are required in body" });
-
-        Console.WriteLine("[AuthController] ExchangeCode called");
-        Console.WriteLine($" code: {(req.Code?.Length > 10 ? req.Code[..10] + "..." : req.Code)}");
-        Console.WriteLine($" redirect_uri: {req.RedirectUri}");
-        Console.WriteLine($" code_verifier: {(req.CodeVerifier?.Length > 10 ? req.CodeVerifier[..10] + "..." : req.CodeVerifier)}");
+            return BadRequest(new { error = "code and codeVerifier required" });
 
         var client = _httpClientFactory.CreateClient("Wso2");
-
         var form = new Dictionary<string, string?>
         {
             ["grant_type"] = "authorization_code",
@@ -54,16 +45,10 @@ public class AuthController : ControllerBase
         var response = await client.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form!));
         var body = await response.Content.ReadAsStringAsync();
 
-        Console.WriteLine("[AuthController] Token endpoint returned status: " + ((int)response.StatusCode));
-        Console.WriteLine("[AuthController] Body: " + body);
-
-        if (!response.IsSuccessStatusCode)
-            return BadRequest(new { error = body });
-
+        if (!response.IsSuccessStatusCode) return BadRequest(new { error = body });
         return Content(body, "application/json");
     }
 
-    // Refresh
     [HttpPost("refresh")]
     public async Task<IActionResult> Refresh([FromBody] RefreshRequest req)
     {
@@ -71,7 +56,6 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = "refreshToken required" });
 
         var client = _httpClientFactory.CreateClient("Wso2");
-
         var form = new Dictionary<string, string?>
         {
             ["grant_type"] = "refresh_token",
@@ -82,13 +66,10 @@ public class AuthController : ControllerBase
         var response = await client.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form!));
         var body = await response.Content.ReadAsStringAsync();
 
-        if (!response.IsSuccessStatusCode)
-            return BadRequest(new { error = body });
-
+        if (!response.IsSuccessStatusCode) return BadRequest(new { error = body });
         return Content(body, "application/json");
     }
 
-    // Logout URL
     [HttpGet("logout-url")]
     public IActionResult LogoutUrl([FromQuery] string idToken)
     {
