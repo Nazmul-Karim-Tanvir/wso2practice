@@ -1,0 +1,39 @@
+###############
+# .NET backend
+###############
+bin/
+obj/
+out/
+*.dll
+*.exe
+*.pdb
+*.cache
+
+# User-specific configs
+launchSettings.json
+appsettings.Development.json
+
+###############
+# IDE settings
+###############
+.vs/
+.vscode/
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+
+###############
+# Frontend (React/Vite)
+###############
+node_modules/
+dist/
+build/
+wwwroot/dist/
+wwwroot/lib/
+
+###############
+# Logs / publish
+###############
+*.log
+publish/
