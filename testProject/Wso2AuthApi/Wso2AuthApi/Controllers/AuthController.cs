@@ -16,6 +16,7 @@ public class AuthController : ControllerBase
         _httpClientFactory = httpClientFactory;
     }
 
+    // -------------------- PKCE Generation --------------------
     [HttpGet("pkce")]
     public IActionResult GetPkce()
     {
@@ -23,9 +24,11 @@ public class AuthController : ControllerBase
         using var sha = SHA256.Create();
         var challengeBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(codeVerifier));
         var codeChallenge = Base64Url(challengeBytes);
+
         return Ok(new { code_verifier = codeVerifier, code_challenge = codeChallenge });
     }
 
+    // -------------------- Exchange Auth Code --------------------
     [HttpPost("token")]
     public async Task<IActionResult> ExchangeCode([FromBody] TokenRequest req)
     {
@@ -33,11 +36,12 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = "code and codeVerifier required" });
 
         var client = _httpClientFactory.CreateClient("Wso2");
+
         var form = new Dictionary<string, string?>
         {
-            ["grant_type"] = "authorization_code",
+            ["grant_type"] = "authorization_code",  // MUST
             ["code"] = req.Code,
-            ["redirect_uri"] = req.RedirectUri,
+            ["redirect_uri"] = req.RedirectUri,     // must match exactly WSO2 registration
             ["client_id"] = ClientId,
             ["code_verifier"] = req.CodeVerifier
         };
@@ -45,10 +49,17 @@ public class AuthController : ControllerBase
         var response = await client.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form!));
         var body = await response.Content.ReadAsStringAsync();
 
-        if (!response.IsSuccessStatusCode) return BadRequest(new { error = body });
+        if (!response.IsSuccessStatusCode)
+        {
+            Console.WriteLine($"[TOKEN ERROR] {body}");
+            return BadRequest(new { error = body });
+        }
+
+        // Mark code as exchanged if you want to track server-side
         return Content(body, "application/json");
     }
 
+    // -------------------- Refresh Token --------------------
     [HttpPost("refresh")]
     public async Task<IActionResult> Refresh([FromBody] RefreshRequest req)
     {
@@ -66,10 +77,16 @@ public class AuthController : ControllerBase
         var response = await client.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form!));
         var body = await response.Content.ReadAsStringAsync();
 
-        if (!response.IsSuccessStatusCode) return BadRequest(new { error = body });
+        if (!response.IsSuccessStatusCode)
+        {
+            Console.WriteLine($"[REFRESH ERROR] {body}");
+            return BadRequest(new { error = body });
+        }
+
         return Content(body, "application/json");
     }
 
+    // -------------------- Logout URL --------------------
     [HttpGet("logout-url")]
     public IActionResult LogoutUrl([FromQuery] string idToken)
     {
@@ -78,10 +95,12 @@ public class AuthController : ControllerBase
         return Ok(new { logoutUrl = url });
     }
 
+    // -------------------- Helpers --------------------
     private static string Base64Url(ReadOnlySpan<byte> bytes) =>
         Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").Replace("=", "");
 }
 
+// -------------------- Request Models --------------------
 public class TokenRequest
 {
     public string Code { get; set; } = default!;

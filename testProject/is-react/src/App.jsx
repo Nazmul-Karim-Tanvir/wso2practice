@@ -22,6 +22,8 @@ export default function App() {
 
     // If no code or already exchanged, stop
     if (!code || !codeVerifier || sessionStorage.getItem("code_exchanged")) return;
+    sessionStorage.setItem("code_exchanged", "true");
+
 
     (async () => {
       try {
