@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Wso2AuthApi")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3d458e6d0fe69a8ce500c254202923cb600038d1")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+34adba4ea607d118561a4eceb423a107587259cf")]
 [assembly: System.Reflection.AssemblyProductAttribute("Wso2AuthApi")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Wso2AuthApi")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
