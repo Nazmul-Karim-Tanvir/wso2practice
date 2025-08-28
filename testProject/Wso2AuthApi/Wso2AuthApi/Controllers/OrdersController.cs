@@ -13,7 +13,8 @@ public class OrdersController : ControllerBase
         var orders = new[]
         {
             new { id = 1, item = "Laptop", price = 1200 },
-            new { id = 2, item = "Phone", price = 800 }
+            new { id = 2, item = "Phone", price = 800 },
+            new {id =3, item = "House of dead game", price=500},
         };
         return Ok(orders);
     }
