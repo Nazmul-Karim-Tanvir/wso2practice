@@ -35,7 +35,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             ValidateIssuer = true,
             ValidIssuer = "https://localhost:9443/oauth2/token",
-            ValidateAudience = false,
+            ValidateAudience = true,
+            ValidAudience = "OkQXerPG4ASHB4RAKQBSGaqFG4wa",
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(30),
             ValidateIssuerSigningKey = true
@@ -119,6 +120,7 @@ static class JwksCache
         catch
         {
             return Array.Empty<SecurityKey>();
+
         }
     }
 }
