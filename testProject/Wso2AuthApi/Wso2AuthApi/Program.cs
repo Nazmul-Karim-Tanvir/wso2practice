@@ -117,10 +117,11 @@ static class JwksCache
 
             return keys;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"[JWKS ERROR] Failed to fetch keys: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
             return Array.Empty<SecurityKey>();
-
         }
     }
 }
