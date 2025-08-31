@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import Cookies from "js-cookie";
 
 const CLIENT_ID = "OkQXerPG4ASHB4RAKQBSGaqFG4wa";
 const REDIRECT_URI = "http://localhost:5173";
@@ -9,8 +10,6 @@ const API_BASE = "http://localhost:5032";
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [displayName, setDisplayName] = useState("");
-  const [accessToken, setAccessToken] = useState("");
-  const [refreshToken, setRefreshToken] = useState("");
   const [orders, setOrders] = useState([]);
   const [error, setError] = useState("");
 
@@ -18,29 +17,26 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
-    const codeVerifier = sessionStorage.getItem("pkce_verifier");
+    const codeVerifier = Cookies.get("pkce_verifier");
 
-    // If no code or already exchanged, stop
-    if (!code || !codeVerifier || sessionStorage.getItem("code_exchanged")) return;
-    sessionStorage.setItem("code_exchanged", "true");
-
+    if (!code || !codeVerifier || Cookies.get("code_exchanged")) return;
+    Cookies.set("code_exchanged", "true");
 
     (async () => {
       try {
         const res = await fetch(`${API_BASE}/api/auth/token`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI })
+          body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI }),
         });
+
         const data = await res.json();
         if (!res.ok) { setError(data?.error); return; }
 
-        sessionStorage.setItem("access_token", data.access_token);
-        sessionStorage.setItem("id_token", data.id_token);
-        if (data.refresh_token) sessionStorage.setItem("refresh_token", data.refresh_token);
-
-        // 🚀 Mark code as already used
-        sessionStorage.setItem("code_exchanged", "true");
+        // Save tokens in cookies
+        Cookies.set("access_token", data.access_token, { secure: true, sameSite: "Strict" });
+        Cookies.set("id_token", data.id_token, { secure: true, sameSite: "Strict" });
+        if (data.refresh_token) Cookies.set("refresh_token", data.refresh_token, { secure: true, sameSite: "Strict" });
 
         setIsAuthenticated(true);
         const payload = JSON.parse(atob(data.id_token.split(".")[1]));
@@ -53,11 +49,11 @@ export default function App() {
     })();
   }, []);
 
-
+  // Login handler
   const handleLogin = async () => {
     try {
       const pkce = await fetch(`${API_BASE}/api/auth/pkce`).then(r => r.json());
-      sessionStorage.setItem("pkce_verifier", pkce.code_verifier);
+      Cookies.set("pkce_verifier", pkce.code_verifier, { secure: true, sameSite: "Strict" });
 
       const qs = new URLSearchParams({
         response_type: "code",
@@ -69,32 +65,46 @@ export default function App() {
       });
 
       window.location.href = `${AUTH_URL}?${qs.toString()}`;
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message);
+    }
   };
 
+  // Logout handler
   const handleLogout = async () => {
     try {
-      const idToken = sessionStorage.getItem("id_token");
+      const idToken = Cookies.get("id_token");
       const res = await fetch(`${API_BASE}/api/auth/logout-url?idToken=${encodeURIComponent(idToken || "")}`);
       const { logoutUrl } = await res.json();
 
-      sessionStorage.clear();
+      // Clear cookies
+      Cookies.remove("access_token");
+      Cookies.remove("id_token");
+      Cookies.remove("refresh_token");
+      Cookies.remove("pkce_verifier");
+      Cookies.remove("code_exchanged");
+
       setIsAuthenticated(false);
       setDisplayName("");
-      setAccessToken("");
-      setRefreshToken("");
       setOrders([]);
       window.location.href = logoutUrl;
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message);
+    }
   };
 
+  // Fetch orders
   const fetchOrders = async () => {
     try {
-      const token = sessionStorage.getItem("access_token");
-      const res = await fetch(`${API_BASE}/api/orders`, { headers: { Authorization: `Bearer ${token}` } });
+      const token = Cookies.get("access_token");
+      const res = await fetch(`${API_BASE}/api/orders`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (!res.ok) throw new Error(await res.text());
       setOrders(await res.json());
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message);
+    }
   };
 
   return (
