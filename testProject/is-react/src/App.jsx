@@ -13,7 +13,7 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [error, setError] = useState("");
 
-  // Handle redirect (code -> token)
+  // -------------------- Handle redirect after login --------------------
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
@@ -33,7 +33,7 @@ export default function App() {
         const data = await res.json();
         if (!res.ok) { setError(data?.error); return; }
 
-        // Save tokens in cookies
+        // Save tokens in HttpOnly cookies via backend (here simulated)
         Cookies.set("access_token", data.access_token, { secure: true, sameSite: "Strict" });
         Cookies.set("id_token", data.id_token, { secure: true, sameSite: "Strict" });
         if (data.refresh_token) Cookies.set("refresh_token", data.refresh_token, { secure: true, sameSite: "Strict" });
@@ -49,7 +49,7 @@ export default function App() {
     })();
   }, []);
 
-  // Login handler
+  // -------------------- Login handler --------------------
   const handleLogin = async () => {
     try {
       const pkce = await fetch(`${API_BASE}/api/auth/pkce`).then(r => r.json());
@@ -64,20 +64,23 @@ export default function App() {
         code_challenge_method: "S256",
       });
 
+      // redirect to WSO2 login
       window.location.href = `${AUTH_URL}?${qs.toString()}`;
     } catch (e) {
       setError(e.message);
     }
   };
 
-  // Logout handler
+  // -------------------- Logout handler --------------------
   const handleLogout = async () => {
     try {
-      const idToken = Cookies.get("id_token");
-      const res = await fetch(`${API_BASE}/api/auth/logout-url?idToken=${encodeURIComponent(idToken || "")}`);
+      // Read ID token before clearing cookies
+      const idToken = Cookies.get("id_token") || "";
+
+      const res = await fetch(`${API_BASE}/api/auth/logout-url?idToken=${encodeURIComponent(idToken)}`);
       const { logoutUrl } = await res.json();
 
-      // Clear cookies
+      // Clear cookies AFTER reading idToken
       Cookies.remove("access_token");
       Cookies.remove("id_token");
       Cookies.remove("refresh_token");
@@ -87,13 +90,15 @@ export default function App() {
       setIsAuthenticated(false);
       setDisplayName("");
       setOrders([]);
+
+      // Redirect to WSO2 logout
       window.location.href = logoutUrl;
     } catch (e) {
       setError(e.message);
     }
   };
 
-  // Fetch orders
+  // -------------------- Fetch orders --------------------
   const fetchOrders = async () => {
     try {
       const token = Cookies.get("access_token");

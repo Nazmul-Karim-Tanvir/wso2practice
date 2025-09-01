@@ -39,9 +39,9 @@ public class AuthController : ControllerBase
 
         var form = new Dictionary<string, string?>
         {
-            ["grant_type"] = "authorization_code",  // MUST
+            ["grant_type"] = "authorization_code",
             ["code"] = req.Code,
-            ["redirect_uri"] = req.RedirectUri,     // must match exactly WSO2 registration
+            ["redirect_uri"] = req.RedirectUri,
             ["client_id"] = ClientId,
             ["code_verifier"] = req.CodeVerifier
         };
@@ -55,22 +55,43 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = body });
         }
 
-        // Mark code as exchanged if you want to track server-side
+        var json = System.Text.Json.JsonDocument.Parse(body).RootElement;
+
+        // Set tokens in HttpOnly cookies
+        if (json.TryGetProperty("access_token", out var accessToken))
+        {
+            Response.Cookies.Append("access_token", accessToken.GetString()!,
+                new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict });
+        }
+
+        if (json.TryGetProperty("refresh_token", out var refreshToken))
+        {
+            Response.Cookies.Append("refresh_token", refreshToken.GetString()!,
+                new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict });
+        }
+
+        if (json.TryGetProperty("id_token", out var idToken))
+        {
+            Response.Cookies.Append("id_token", idToken.GetString()!,
+                new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict });
+        }
+
         return Content(body, "application/json");
     }
 
     // -------------------- Refresh Token --------------------
     [HttpPost("refresh")]
-    public async Task<IActionResult> Refresh([FromBody] RefreshRequest req)
+    public async Task<IActionResult> Refresh()
     {
-        if (req == null || string.IsNullOrEmpty(req.RefreshToken))
-            return BadRequest(new { error = "refreshToken required" });
+        var refreshToken = Request.Cookies["refresh_token"];
+        if (string.IsNullOrEmpty(refreshToken))
+            return BadRequest(new { error = "refresh token missing" });
 
         var client = _httpClientFactory.CreateClient("Wso2");
         var form = new Dictionary<string, string?>
         {
             ["grant_type"] = "refresh_token",
-            ["refresh_token"] = req.RefreshToken,
+            ["refresh_token"] = refreshToken,
             ["client_id"] = ClientId
         };
 
@@ -83,12 +104,33 @@ public class AuthController : ControllerBase
             return BadRequest(new { error = body });
         }
 
+        var json = System.Text.Json.JsonDocument.Parse(body).RootElement;
+
+        // Update cookies
+        if (json.TryGetProperty("access_token", out var accessToken))
+        {
+            Response.Cookies.Append("access_token", accessToken.GetString()!,
+                new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict });
+        }
+
+        if (json.TryGetProperty("refresh_token", out var newRefreshToken))
+        {
+            Response.Cookies.Append("refresh_token", newRefreshToken.GetString()!,
+                new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict });
+        }
+
+        if (json.TryGetProperty("id_token", out var idToken))
+        {
+            Response.Cookies.Append("id_token", idToken.GetString()!,
+                new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict });
+        }
+
         return Content(body, "application/json");
     }
 
     // -------------------- Logout URL --------------------
     [HttpGet("logout-url")]
-    public IActionResult LogoutUrl([FromQuery] string idToken)
+    public IActionResult LogoutUrl([FromQuery] string idToken = "")
     {
         var postLogout = "http://localhost:5173";
         var url = $"{LogoutEndpoint}?id_token_hint={Uri.EscapeDataString(idToken)}&post_logout_redirect_uri={Uri.EscapeDataString(postLogout)}";
@@ -106,9 +148,4 @@ public class TokenRequest
     public string Code { get; set; } = default!;
     public string CodeVerifier { get; set; } = default!;
     public string RedirectUri { get; set; } = default!;
-}
-
-public class RefreshRequest
-{
-    public string RefreshToken { get; set; } = default!;
 }
