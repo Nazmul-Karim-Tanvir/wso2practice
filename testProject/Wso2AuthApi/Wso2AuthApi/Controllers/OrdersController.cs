@@ -1,20 +1,20 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Linq;
 
 [ApiController]
 [Route("api/[controller]")]
 public class OrdersController : ControllerBase
 {
+    // Only users with "admin" role can access this
     [HttpGet]
-    [Authorize]
+    [Authorize(Roles = "admin")]
     public IActionResult GetOrders()
     {
         var orders = new[]
         {
             new { id = 1, item = "Laptop", price = 1200 },
             new { id = 2, item = "Phone", price = 800 },
-            new {id =3, item = "House of dead game", price=500},
+            new { id = 3, item = "House of dead game", price = 500 },
         };
         return Ok(orders);
     }

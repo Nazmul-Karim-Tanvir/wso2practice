@@ -169,6 +169,22 @@ export default function App() {
             </button>
           </div>
 
+          {/* 👇 Show Tokens here */}
+          <div className="bg-gray-100 p-4 rounded-lg text-left max-h-60 overflow-y-auto">
+            <h3 className="text-lg font-semibold mb-2 text-indigo-700">🔑 Tokens</h3>
+            <pre className="text-xs text-gray-800 whitespace-pre-wrap break-all">
+              {JSON.stringify(
+                {
+                  access_token: Cookies.get("access_token"),
+                  id_token: Cookies.get("id_token"),
+                  refresh_token: Cookies.get("refresh_token"),
+                },
+                null,
+                2
+              )}
+            </pre>
+          </div>
+
           {orders.length > 0 && (
             <div className="bg-gray-100 p-4 rounded-lg text-left max-h-60 overflow-y-auto">
               <pre className="text-sm text-gray-800">{JSON.stringify(orders, null, 2)}</pre>

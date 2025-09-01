@@ -1,10 +1,11 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text.Json;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Controllers & CORS
+// ------------------ Controllers & CORS ------------------
 builder.Services.AddControllers();
 builder.Services.AddCors(options =>
 {
@@ -15,7 +16,7 @@ builder.Services.AddCors(options =>
               .AllowCredentials());
 });
 
-// HttpClient for WSO2 (allow self-signed cert in dev)
+// ------------------ HttpClient for WSO2 ------------------
 builder.Services.AddHttpClient("Wso2", c =>
 {
     c.BaseAddress = new Uri("https://localhost:9443");
@@ -27,7 +28,7 @@ builder.Services.AddHttpClient("Wso2", c =>
     };
 });
 
-// JWT Bearer Authentication
+// ------------------ JWT Bearer Authentication ------------------
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -39,19 +40,46 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = "OkQXerPG4ASHB4RAKQBSGaqFG4wa",
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(30),
-            ValidateIssuerSigningKey = true
+            ValidateIssuerSigningKey = true,
+
+            // Name claim for identifying user
+            NameClaimType = "sub"
         };
 
+        // Token validated event to map roles
         options.Events = new JwtBearerEvents
         {
+            OnTokenValidated = ctx =>
+            {
+                var identity = ctx.Principal?.Identity as ClaimsIdentity;
+                if (identity != null && ctx.SecurityToken is System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwt)
+                {
+                    // Remove any existing role claims
+                    var existingRoles = identity.FindAll(ClaimTypes.Role).ToList();
+                    foreach (var rc in existingRoles)
+                        identity.RemoveClaim(rc);
+
+                    // Extract roles from JWT payload
+                    if (jwt.Payload.TryGetValue("roles", out var rolesObj) &&
+                        rolesObj is JsonElement jsonElement &&
+                        jsonElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var roleElement in jsonElement.EnumerateArray())
+                        {
+                            var role = roleElement.GetString();
+                            if (!string.IsNullOrEmpty(role))
+                                identity.AddClaim(new Claim(ClaimTypes.Role, role));
+                        }
+                    }
+                }
+
+                Console.WriteLine("[JWT] Token validated for: " + ctx.Principal?.Identity?.Name);
+                return Task.CompletedTask;
+            },
+
             OnAuthenticationFailed = ctx =>
             {
                 Console.WriteLine($"[JWT] Authentication failed: {ctx.Exception?.Message}");
-                return Task.CompletedTask;
-            },
-            OnTokenValidated = ctx =>
-            {
-                Console.WriteLine("[JWT] Token validated for: " + ctx.Principal?.Identity?.Name);
                 return Task.CompletedTask;
             }
         };
@@ -68,8 +96,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
+// ------------------ Authorization ------------------
 builder.Services.AddAuthorization();
-builder.Services.AddControllers();
 
 var app = builder.Build();
 app.UseDeveloperExceptionPage();
