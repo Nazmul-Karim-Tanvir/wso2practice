@@ -12,6 +12,7 @@ export default function App() {
   const [displayName, setDisplayName] = useState("");
   const [orders, setOrders] = useState([]);
   const [error, setError] = useState("");
+  const [tokens, setTokens] = useState({ access_token: "", id_token: "", refresh_token: "" });
 
   // -------------------- Handle redirect after login --------------------
   useEffect(() => {
@@ -28,19 +29,24 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI }),
+          credentials: "include" // ✅ send HttpOnly cookies automatically
         });
 
         const data = await res.json();
         if (!res.ok) { setError(data?.error); return; }
 
-        // Save tokens in HttpOnly cookies via backend (here simulated)
-        Cookies.set("access_token", data.access_token, { secure: true, sameSite: "Strict" });
-        Cookies.set("id_token", data.id_token, { secure: true, sameSite: "Strict" });
-        if (data.refresh_token) Cookies.set("refresh_token", data.refresh_token, { secure: true, sameSite: "Strict" });
-
         setIsAuthenticated(true);
+
+        // Decode ID token from backend response for display
         const payload = JSON.parse(atob(data.id_token.split(".")[1]));
         setDisplayName(payload.name || payload.preferred_username || "User");
+
+        // Store tokens locally only for UI display (not for sending to server)
+        setTokens({
+          access_token: data.access_token || "",
+          id_token: data.id_token || "",
+          refresh_token: data.refresh_token || ""
+        });
 
         window.history.replaceState({}, document.title, "/");
       } catch (e) {
@@ -64,7 +70,6 @@ export default function App() {
         code_challenge_method: "S256",
       });
 
-      // redirect to WSO2 login
       window.location.href = `${AUTH_URL}?${qs.toString()}`;
     } catch (e) {
       setError(e.message);
@@ -74,24 +79,21 @@ export default function App() {
   // -------------------- Logout handler --------------------
   const handleLogout = async () => {
     try {
-      // Read ID token before clearing cookies
-      const idToken = Cookies.get("id_token") || "";
+      const idToken = tokens.id_token || "";
 
-      const res = await fetch(`${API_BASE}/api/auth/logout-url?idToken=${encodeURIComponent(idToken)}`);
+      const res = await fetch(`${API_BASE}/api/auth/logout-url?idToken=${encodeURIComponent(idToken)}`, {
+        credentials: "include"
+      });
       const { logoutUrl } = await res.json();
 
-      // Clear cookies AFTER reading idToken
-      Cookies.remove("access_token");
-      Cookies.remove("id_token");
-      Cookies.remove("refresh_token");
-      Cookies.remove("pkce_verifier");
-      Cookies.remove("code_exchanged");
-
+      // Clear local tokens only for UI
       setIsAuthenticated(false);
       setDisplayName("");
       setOrders([]);
+      setTokens({ access_token: "", id_token: "", refresh_token: "" });
+      Cookies.remove("pkce_verifier");
+      Cookies.remove("code_exchanged");
 
-      // Redirect to WSO2 logout
       window.location.href = logoutUrl;
     } catch (e) {
       setError(e.message);
@@ -101,9 +103,8 @@ export default function App() {
   // -------------------- Fetch orders --------------------
   const fetchOrders = async () => {
     try {
-      const token = Cookies.get("access_token");
       const res = await fetch(`${API_BASE}/api/orders`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include" // ✅ send HttpOnly cookie automatically
       });
       if (!res.ok) throw new Error(await res.text());
       setOrders(await res.json());
@@ -169,19 +170,11 @@ export default function App() {
             </button>
           </div>
 
-          {/* 👇 Show Tokens here */}
+          {/* 👇 Show Tokens here (UI only, not used for requests) */}
           <div className="bg-gray-100 p-4 rounded-lg text-left max-h-60 overflow-y-auto">
             <h3 className="text-lg font-semibold mb-2 text-indigo-700">🔑 Tokens</h3>
             <pre className="text-xs text-gray-800 whitespace-pre-wrap break-all">
-              {JSON.stringify(
-                {
-                  access_token: Cookies.get("access_token"),
-                  id_token: Cookies.get("id_token"),
-                  refresh_token: Cookies.get("refresh_token"),
-                },
-                null,
-                2
-              )}
+              {JSON.stringify(tokens, null, 2)}
             </pre>
           </div>
 
