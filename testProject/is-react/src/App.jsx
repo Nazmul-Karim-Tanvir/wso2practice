@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import Cookies from "js-cookie";
 
 const CLIENT_ID = "OkQXerPG4ASHB4RAKQBSGaqFG4wa";
@@ -13,6 +13,82 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [error, setError] = useState("");
   const [tokens, setTokens] = useState({ access_token: "", id_token: "", refresh_token: "" });
+  const refreshTimer = useRef(null);
+
+  // -------------------- Silent Refresh Setup --------------------
+  const scheduleSilentRefresh = (token) => {
+    try {
+      const payload = JSON.parse(atob(token.split(".")[1]));
+      if (!payload.exp) return;
+
+      const expiry = payload.exp * 1000; // exp is in seconds
+      const now = Date.now();
+      const refreshTime = expiry - now - 60 * 1000; // 1 min before expiry
+
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+
+      if (refreshTime > 0) {
+        refreshTimer.current = setTimeout(() => {
+          silentRefresh();
+        }, refreshTime);
+        console.log(`[SilentRefresh] Scheduled in ${Math.round(refreshTime / 1000)}s`);
+      }
+    } catch (e) {
+      console.error("[SilentRefresh] Failed to decode token", e);
+    }
+  };
+
+  const silentRefresh = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setTokens({
+          access_token: data.access_token || "",
+          id_token: data.id_token || "",
+          refresh_token: data.refresh_token || "",
+        });
+
+        console.log("[SilentRefresh] Token refreshed at", new Date().toISOString());
+
+        // Schedule next refresh
+        scheduleSilentRefresh(data.access_token || data.id_token);
+      } else {
+        console.warn("[SilentRefresh] Failed, logging out user");
+        setIsAuthenticated(false);
+      }
+    } catch (e) {
+      console.error("[SilentRefresh] Error:", e);
+    }
+  };
+
+  // -------------------- Fetch with auto refresh (fallback) --------------------
+  const fetchWithRefresh = async (url, options = {}) => {
+    const headers = {
+      ...(options.headers || {}),
+      ...(tokens.access_token ? { Authorization: `Bearer ${tokens.access_token}` } : {}),
+    };
+
+    let res = await fetch(url, { ...options, headers, credentials: "include" });
+
+    if (res.status === 401) {
+      await silentRefresh();
+
+      const retryHeaders = {
+        ...(options.headers || {}),
+        ...(tokens.access_token ? { Authorization: `Bearer ${tokens.access_token}` } : {}),
+      };
+
+      res = await fetch(url, { ...options, headers: retryHeaders, credentials: "include" });
+    }
+
+    return res;
+  };
+
 
   // -------------------- Handle redirect after login --------------------
   useEffect(() => {
@@ -29,7 +105,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI }),
-          credentials: "include" // ✅ send HttpOnly cookies automatically
+          credentials: "include"
         });
 
         const data = await res.json();
@@ -37,16 +113,17 @@ export default function App() {
 
         setIsAuthenticated(true);
 
-        // Decode ID token from backend response for display
         const payload = JSON.parse(atob(data.id_token.split(".")[1]));
         setDisplayName(payload.name || payload.preferred_username || "User");
 
-        // Store tokens locally only for UI display (not for sending to server)
         setTokens({
           access_token: data.access_token || "",
           id_token: data.id_token || "",
           refresh_token: data.refresh_token || ""
         });
+
+        // Start silent refresh
+        scheduleSilentRefresh(data.access_token || data.id_token);
 
         window.history.replaceState({}, document.title, "/");
       } catch (e) {
@@ -86,13 +163,14 @@ export default function App() {
       });
       const { logoutUrl } = await res.json();
 
-      // Clear local tokens only for UI
       setIsAuthenticated(false);
       setDisplayName("");
       setOrders([]);
       setTokens({ access_token: "", id_token: "", refresh_token: "" });
       Cookies.remove("pkce_verifier");
       Cookies.remove("code_exchanged");
+
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
 
       window.location.href = logoutUrl;
     } catch (e) {
@@ -103,9 +181,7 @@ export default function App() {
   // -------------------- Fetch orders --------------------
   const fetchOrders = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/orders`, {
-        credentials: "include" // ✅ send HttpOnly cookie automatically
-      });
+      const res = await fetchWithRefresh(`${API_BASE}/api/orders`);
       if (!res.ok) throw new Error(await res.text());
       setOrders(await res.json());
     } catch (e) {
