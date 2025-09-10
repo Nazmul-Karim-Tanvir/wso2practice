@@ -4,7 +4,7 @@ import Cookies from "js-cookie";
 const CLIENT_ID = "OkQXerPG4ASHB4RAKQBSGaqFG4wa";
 const REDIRECT_URI = "http://localhost:5173";
 const AUTH_URL = "https://localhost:9443/oauth2/authorize";
-const SCOPE = "openid profile email";
+const SCOPE = "email openid profile roles";
 const API_BASE = "http://localhost:5032";
 
 export default function App() {
@@ -114,8 +114,13 @@ export default function App() {
         setIsAuthenticated(true);
 
         const payload = JSON.parse(atob(data.id_token.split(".")[1]));
-        setDisplayName(payload.name || payload.preferred_username || "User");
-
+        setDisplayName(
+          payload.name ||
+          payload.preferred_username ||
+          payload.username ||
+          payload.email ||
+          "User"
+        );
         setTokens({
           access_token: data.access_token || "",
           id_token: data.id_token || "",
