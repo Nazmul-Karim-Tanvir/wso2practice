@@ -1,0 +1,405 @@
+
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text.Json;
+using System.Security.Claims;
+using Microsoft.IdentityModel.JsonWebTokens;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ------------------ Controllers & CORS ------------------
+builder.Services.AddControllers();
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+        policy.WithOrigins("http://localhost:5173")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials());
+});
+
+// ------------------ HttpClient for WSO2 ------------------
+builder.Services.AddHttpClient("Wso2", c =>
+{
+    c.BaseAddress = new Uri("https://localhost:9443");
+}).ConfigurePrimaryHttpMessageHandler(() =>
+{
+    return new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+    };
+});
+
+// ------------------ JWT Bearer Authentication ------------------
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = "https://localhost:9443/oauth2/token",
+            ValidateAudience = true,
+            ValidAudience = "OkQXerPG4ASHB4RAKQBSGaqFG4wa",
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30),
+            ValidateIssuerSigningKey = true,
+            NameClaimType = "sub"
+        };
+
+        options.RequireHttpsMetadata = false;
+        options.BackchannelHttpHandler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        };
+
+        options.TokenValidationParameters.IssuerSigningKeyResolver = (token, securityToken, kid, validationParameters) =>
+        {
+            Console.WriteLine($"[JWT] Resolving signing key for kid: {kid}");
+            return JwksCache.GetKeysAsync().GetAwaiter().GetResult();
+        };
+
+        // Enable PII for debugging
+        Microsoft.IdentityModel.Logging.IdentityModelEventSource.ShowPII = true;
+
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = ctx =>
+            {
+                Console.WriteLine("[JWT] SecurityToken Type: " + (ctx.SecurityToken?.GetType()?.ToString() ?? "null"));
+                Console.WriteLine("[JWT] Raw Token: " + (ctx.Request.Headers["Authorization"].ToString() ?? "No Authorization header"));
+
+                var jwt = ctx.SecurityToken as JsonWebToken;
+                if (jwt != null)
+                {
+                    // Log all claims
+                    Console.WriteLine("[JWT] All Claims: " + string.Join(", ", jwt.Claims.Select(c => $"{c.Type}: {c.Value}")));
+
+                    var identity = ctx.Principal?.Identity as ClaimsIdentity;
+                    if (identity != null)
+                    {
+                        // Remove existing role claims
+                        var existingRoles = identity.FindAll(ClaimTypes.Role).ToList();
+                        foreach (var rc in existingRoles)
+                            identity.RemoveClaim(rc);
+
+                        // Extract roles from JWT payload
+                        if (jwt.TryGetPayloadValue("roles", out JsonElement jsonElement) &&
+                            jsonElement.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var roleElement in jsonElement.EnumerateArray())
+                            {
+                                var role = roleElement.GetString();
+                                if (!string.IsNullOrEmpty(role))
+                                    identity.AddClaim(new Claim(ClaimTypes.Role, role));
+                            }
+                        }
+
+                        // Set Name claim
+                        var subClaim = jwt.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
+                        if (string.IsNullOrEmpty(subClaim))
+                        {
+                            var emailClaim = jwt.Claims.FirstOrDefault(c => c.Type == "email")?.Value;
+                            if (!string.IsNullOrEmpty(emailClaim))
+                            {
+                                identity.AddClaim(new Claim(ClaimTypes.Name, emailClaim));
+                                subClaim = emailClaim;
+                            }
+                            else
+                            {
+                                Console.WriteLine("[JWT] No valid sub or email claim found");
+                                subClaim = "null";
+                            }
+                        }
+                        Console.WriteLine("[JWT] Token validated for sub: " + subClaim);
+                    }
+                    else
+                    {
+                        Console.WriteLine("[JWT] Identity is null");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("[JWT] Invalid or missing JWT");
+                }
+                return Task.CompletedTask;
+            },
+
+            OnAuthenticationFailed = ctx =>
+            {
+                Console.WriteLine($"[JWT] Authentication failed: {ctx.Exception?.Message}");
+                Console.WriteLine("[JWT] Raw Token: " + (ctx.Request.Headers["Authorization"].ToString() ?? "No Authorization header"));
+                if (ctx.Exception is SecurityTokenExpiredException)
+                {
+                    ctx.Response.StatusCode = 401;
+                    ctx.Response.ContentType = "application/json";
+                    ctx.Response.WriteAsync("{\"error\": \"Token has expired\"}");
+                }
+                else if (ctx.Exception is SecurityTokenInvalidIssuerException)
+                {
+                    ctx.Response.StatusCode = 401;
+                    ctx.Response.ContentType = "application/json";
+                    ctx.Response.WriteAsync("{\"error\": \"Invalid token issuer\"}");
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 401;
+                    ctx.Response.ContentType = "application/json";
+                    ctx.Response.WriteAsync("{\"error\": \"Authentication failed: " + ctx.Exception?.Message + "\"}");
+                }
+                return Task.CompletedTask;
+            }
+        };
+    });
+
+// ------------------ Authorization ------------------
+builder.Services.AddAuthorization();
+
+var app = builder.Build();
+app.UseDeveloperExceptionPage();
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.Run();
+
+// ------------------- JWKS Cache -------------------
+static class JwksCache
+{
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(10);
+    private static DateTime _lastFetch = DateTime.MinValue;
+    private static SecurityKey[]? _cachedKeys = null;
+    private static readonly object _lock = new();
+
+    public static async Task<IEnumerable<SecurityKey>> GetKeysAsync()
+    {
+        lock (_lock)
+        {
+            if (_cachedKeys != null && DateTime.UtcNow - _lastFetch < CacheDuration)
+            {
+                Console.WriteLine("[JWKS] Using cached keys: " + _cachedKeys.Length);
+                return _cachedKeys;
+            }
+        }
+
+        try
+        {
+            using var handler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+            using var client = new HttpClient(handler) { BaseAddress = new Uri("https://localhost:9443") };
+
+            Console.WriteLine("[JWKS] Fetching keys from /oauth2/jwks");
+            var resp = await client.GetAsync("/oauth2/jwks");
+            resp.EnsureSuccessStatusCode();
+            var json = await resp.Content.ReadAsStringAsync();
+            Console.WriteLine("[JWKS] JWKS response: " + json);
+            var jwks = new JsonWebKeySet(json);
+            var keys = jwks.Keys.Select(k => (SecurityKey)k).ToArray();
+
+            lock (_lock)
+            {
+                _cachedKeys = keys;
+                _lastFetch = DateTime.UtcNow;
+                Console.WriteLine("[JWKS] Cached {0} keys", keys.Length);
+            }
+
+            return keys;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[JWKS ERROR] Failed to fetch keys: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
+            return Array.Empty<SecurityKey>();
+        }
+    }
+}
+
+
+/* 
+
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text.Json;
+using System.Security.Claims;
+using System.Security.Cryptography;
+
+namespace MyApi
+{
+    class Program
+    {
+        public static void Main(string[] args)
+        {
+            var builder = WebApplication.CreateBuilder(args);
+
+            // ------------------ Logging ------------------
+            builder.Logging.ClearProviders();
+            builder.Logging.AddConsole();
+
+            // ------------------ Controllers & CORS ------------------
+            builder.Services.AddControllers();
+            builder.Services.AddCors(options =>
+            {
+                options.AddDefaultPolicy(policy =>
+                    policy.WithOrigins("http://localhost:5173")
+                          .AllowAnyHeader()
+                          .AllowAnyMethod()
+                          .AllowCredentials());
+            });
+
+            // ------------------ HttpClient for WSO2 ------------------
+            builder.Services.AddHttpClient("Wso2", c =>
+            {
+                c.BaseAddress = new Uri("https://localhost:9443");
+            }).ConfigurePrimaryHttpMessageHandler(() =>
+            {
+                return new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                };
+            });
+
+            // ------------------ JWT Bearer Authentication ------------------
+            bool useFakeKeys = true; // toggle for testing
+
+            builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+                .AddJwtBearer(options =>
+                {
+                    options.TokenValidationParameters = new TokenValidationParameters
+                    {
+                        ValidateIssuer = true,
+                        ValidIssuer = "https://localhost:9443/oauth2/token",
+                        ValidateAudience = true,
+                        ValidAudience = "OkQXerPG4ASHB4RAKQBSGaqFG4wa",
+                        ValidateLifetime = true,
+                        ClockSkew = TimeSpan.FromSeconds(30),
+                        ValidateIssuerSigningKey = true,
+                        NameClaimType = "sub"
+                    };
+
+                    options.Events = new JwtBearerEvents
+                    {
+                        OnTokenValidated = ctx =>
+                        {
+                            var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                            var identity = ctx.Principal?.Identity as ClaimsIdentity;
+
+                            if (identity != null && ctx.SecurityToken is System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwt)
+                            {
+                                // Remove existing roles
+                                var existingRoles = identity.FindAll(ClaimTypes.Role).ToList();
+                                foreach (var rc in existingRoles)
+                                    identity.RemoveClaim(rc);
+
+                                // Add roles from JWT payload
+                                if (jwt.Payload.TryGetValue("roles", out var rolesObj) &&
+                                    rolesObj is JsonElement jsonElement &&
+                                    jsonElement.ValueKind == JsonValueKind.Array)
+                                {
+                                    foreach (var roleElement in jsonElement.EnumerateArray())
+                                    {
+                                        var role = roleElement.GetString();
+                                        if (!string.IsNullOrEmpty(role))
+                                            identity.AddClaim(new Claim(ClaimTypes.Role, role));
+                                    }
+                                }
+                            }
+
+                            logger.LogInformation("[JWT] Token validated for: {User}", ctx.Principal?.Identity?.Name);
+                            return Task.CompletedTask;
+                        },
+
+                        OnAuthenticationFailed = ctx =>
+                        {
+                            var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                            logger.LogWarning(ctx.Exception, "[JWT] Authentication failed");
+                            return Task.CompletedTask;
+                        }
+                    };
+
+                    options.RequireHttpsMetadata = false;
+                    options.BackchannelHttpHandler = new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                    };
+
+                    options.TokenValidationParameters.IssuerSigningKeyResolver = (token, securityToken, kid, validationParameters) =>
+                    {
+                        if (useFakeKeys)
+                        {
+                            return Program.GetFakeKeys();
+                        }
+
+                        return Program.JwksCache.GetKeysAsync().GetAwaiter().GetResult();
+                    };
+                });
+
+            builder.Services.AddAuthorization();
+
+            var app = builder.Build();
+            app.UseDeveloperExceptionPage();
+            app.UseCors();
+            app.UseAuthentication();
+            app.UseAuthorization();
+            app.MapControllers();
+            app.Run();
+        }
+
+        // ------------------- JWKS Cache -------------------
+        public static class JwksCache
+        {
+            private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(10);
+            private static DateTime _lastFetch = DateTime.MinValue;
+            private static SecurityKey[]? _cachedKeys = null;
+            private static readonly object _lock = new();
+
+            public static async Task<IEnumerable<SecurityKey>> GetKeysAsync()
+            {
+                lock (_lock)
+                {
+                    if (_cachedKeys != null && DateTime.UtcNow - _lastFetch < CacheDuration)
+                        return _cachedKeys;
+                }
+
+                try
+                {
+                    using var handler = new HttpClientHandler
+                    {
+                        ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                    };
+                    using var client = new HttpClient(handler) { BaseAddress = new Uri("https://localhost:9443") };
+
+                    var resp = await client.GetAsync("/oauth2/jwks");
+                    resp.EnsureSuccessStatusCode();
+                    var json = await resp.Content.ReadAsStringAsync();
+                    var jwks = new JsonWebKeySet(json);
+                    var keys = jwks.Keys.Select(k => (SecurityKey)k).ToArray();
+
+                    lock (_lock)
+                    {
+                        _cachedKeys = keys;
+                        _lastFetch = DateTime.UtcNow;
+                    }
+
+                    return keys;
+                }
+                catch
+                {
+                    // fallback if fetching JWKS fails
+                    return Array.Empty<SecurityKey>();
+                }
+            }
+        }
+
+        // ------------------- Fake Keys -------------------
+        public static SecurityKey[] GetFakeKeys()
+        {
+            using var rsa = RSA.Create(2048);
+            var key = new RsaSecurityKey(rsa) { KeyId = "fake-key" };
+            Console.WriteLine("[TEST] Using fake key for JWT verification");
+            Console.Out.Flush();
+            return new SecurityKey[] { key };
+        }
+    }
+}
+*/
