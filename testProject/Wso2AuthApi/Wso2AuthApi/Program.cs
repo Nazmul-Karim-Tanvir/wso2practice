@@ -46,6 +46,17 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             NameClaimType = "sub"
         };
 
+        options.RequireHttpsMetadata = false;
+        options.BackchannelHttpHandler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        };
+
+        options.TokenValidationParameters.IssuerSigningKeyResolver = (token, securityToken, kid, validationParameters) =>
+        {
+            return JwksCache.GetKeysAsync().GetAwaiter().GetResult();
+        };
+
         // Token validated event to map roles
         options.Events = new JwtBearerEvents
         {
@@ -82,17 +93,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 Console.WriteLine($"[JWT] Authentication failed: {ctx.Exception?.Message}");
                 return Task.CompletedTask;
             }
-        };
-
-        options.RequireHttpsMetadata = false;
-        options.BackchannelHttpHandler = new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-        };
-
-        options.TokenValidationParameters.IssuerSigningKeyResolver = (token, securityToken, kid, validationParameters) =>
-        {
-            return JwksCache.GetKeysAsync().GetAwaiter().GetResult();
         };
     });
 
