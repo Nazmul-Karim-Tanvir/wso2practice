@@ -111,17 +111,17 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
                 logger.LogWarning(ctx.Exception, "[JWT] Authentication failed");
 
-                ctx.Response.StatusCode = 401;
-                ctx.Response.ContentType = "application/json";
+                // // ctx.Response.StatusCode = 401;
+                // // ctx.Response.ContentType = "application/json";
 
-                string message = ctx.Exception switch
-                {
-                    SecurityTokenExpiredException => "{\"error\": \"Token has expired\"}",
-                    SecurityTokenInvalidIssuerException => "{\"error\": \"Invalid token issuer\"}",
-                    _ => "{\"error\": \"Authentication failed\"}"
-                };
+                // string message = ctx.Exception switch
+                // {
+                //     SecurityTokenExpiredException => "{\"error\": \"Token has expired\"}",
+                //     SecurityTokenInvalidIssuerException => "{\"error\": \"Invalid token issuer\"}",
+                //     _ => "{\"error\": \"Authentication failed\"}"
+                // };
 
-                return ctx.Response.WriteAsync(message);
+                return Task.CompletedTask;
             }
         };
     });
