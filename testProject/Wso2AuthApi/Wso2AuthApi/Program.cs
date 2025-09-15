@@ -2,8 +2,13 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text.Json;
 using System.Security.Claims;
+using Microsoft.IdentityModel.JsonWebTokens;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ------------------ Logging ------------------
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 
 // ------------------ Controllers & CORS ------------------
 builder.Services.AddControllers();
@@ -41,9 +46,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(30),
             ValidateIssuerSigningKey = true,
-
-            // Name claim for identifying user
-            NameClaimType = "sub"
+            NameClaimType = ClaimTypes.Name
         };
 
         options.RequireHttpsMetadata = false;
@@ -57,22 +60,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             return JwksCache.GetKeysAsync().GetAwaiter().GetResult();
         };
 
-        // Token validated event to map roles
+        // 👇 Events for logging & error handling
         options.Events = new JwtBearerEvents
         {
             OnTokenValidated = ctx =>
             {
                 var identity = ctx.Principal?.Identity as ClaimsIdentity;
-                if (identity != null && ctx.SecurityToken is System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwt)
+                var jwt = ctx.SecurityToken as JsonWebToken;
+
+                if (identity != null && jwt != null)
                 {
-                    // Remove any existing role claims
-                    var existingRoles = identity.FindAll(ClaimTypes.Role).ToList();
-                    foreach (var rc in existingRoles)
+                    // Remove existing role claims
+                    foreach (var rc in identity.FindAll(ClaimTypes.Role).ToList())
                         identity.RemoveClaim(rc);
 
-                    // Extract roles from JWT payload
-                    if (jwt.Payload.TryGetValue("roles", out var rolesObj) &&
-                        rolesObj is JsonElement jsonElement &&
+                    // Add roles from JWT payload
+                    if (jwt.TryGetPayloadValue("roles", out JsonElement jsonElement) &&
                         jsonElement.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var roleElement in jsonElement.EnumerateArray())
@@ -82,16 +85,43 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                                 identity.AddClaim(new Claim(ClaimTypes.Role, role));
                         }
                     }
+
+                    // Set Name claim from "sub" or fallback to "email"
+                    var name = jwt.Claims.FirstOrDefault(c => c.Type == "sub")?.Value
+                               ?? jwt.Claims.FirstOrDefault(c => c.Type == "email")?.Value;
+                    if (!string.IsNullOrEmpty(name) && !identity.HasClaim(c => c.Type == ClaimTypes.Name))
+                        identity.AddClaim(new Claim(ClaimTypes.Name, name));
                 }
 
-                Console.WriteLine("[JWT] Token validated for: " + ctx.Principal?.Identity?.Name);
+                // Logging
+                var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                var userName = ctx.Principal?.Identity?.Name ?? "(no name)";
+                var roles = identity?.Claims
+                                    .Where(c => c.Type == ClaimTypes.Role)
+                                    .Select(c => c.Value)
+                                    .ToList() ?? new List<string>();
+                logger.LogInformation("[JWT] Token validated for: {User}", userName);
+                logger.LogInformation("[JWT] Roles after mapping: {Roles}", string.Join(", ", roles));
+
                 return Task.CompletedTask;
             },
 
             OnAuthenticationFailed = ctx =>
             {
-                Console.WriteLine($"[JWT] Authentication failed: {ctx.Exception?.Message}");
-                return Task.CompletedTask;
+                var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                logger.LogWarning(ctx.Exception, "[JWT] Authentication failed");
+
+                ctx.Response.StatusCode = 401;
+                ctx.Response.ContentType = "application/json";
+
+                string message = ctx.Exception switch
+                {
+                    SecurityTokenExpiredException => "{\"error\": \"Token has expired\"}",
+                    SecurityTokenInvalidIssuerException => "{\"error\": \"Invalid token issuer\"}",
+                    _ => "{\"error\": \"Authentication failed\"}"
+                };
+
+                return ctx.Response.WriteAsync(message);
             }
         };
     });
@@ -148,12 +178,10 @@ static class JwksCache
         catch (Exception ex)
         {
             Console.WriteLine($"[JWKS ERROR] Failed to fetch keys: {ex.Message}");
-            Console.WriteLine(ex.StackTrace);
             return Array.Empty<SecurityKey>();
         }
     }
 }
-
 
 
 /* 
