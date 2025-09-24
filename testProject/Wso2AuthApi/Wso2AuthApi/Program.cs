@@ -10,7 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
-// ------------------ Controllers & CORS ------------------
+// ------------------ Controllers & CORS ------------------ 
 builder.Services.AddControllers();
 builder.Services.AddCors(options =>
 {
